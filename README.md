@@ -15,10 +15,12 @@ The priority is **understanding, not a product**. Every algorithm lives in its
 own module, cites the paper it implements, has a standalone demo, and has its own
 fast, deterministic tests. Components are combined only at the top of the stack.
 
-**Status: complete.** All phases (0–6) are implemented, tested (91 passing
-tests), and documented. See [`applications.md`](applications.md) for where this
-delivers value, and [`notes/`](notes/) for a plain-language write-up of each
-phase.
+**Status: complete.** All phases (0–6) are implemented, tested (97 passing
+tests), and documented. The stack runs on **both** simulated frames and **real
+professional tracking data** (SkillCorner open data) via the `skillcorner.py`
+bridge. See [`applications.md`](applications.md) for where this delivers value,
+[`ENGINEERING.md`](ENGINEERING.md) for a full technical walkthrough, and
+[`notes/`](notes/) for a plain-language write-up of each phase.
 
 ---
 
@@ -64,6 +66,25 @@ phase's algorithm, prints a summary, and saves a figure to `figures/`.
 | 4 | Artificial potential fields (Khatib 1986) | `scripts/04_demo_potential_fields.py` | [potential-fields](notes/phase4-potential-fields.md) |
 | 5 | PSO over Bezier trajectories | `scripts/05_demo_pso.py` | [pso-trajectories](notes/phase5-pso-trajectories.md) |
 | 6 | Reactive defenders + replanning (capstone) | `scripts/06_demo_reactive.py` | [reactive-defenders](notes/phase6-reactive-defenders.md) |
+| **R** | **Real data — SkillCorner → FrozenFrame** | `scripts/07_demo_skillcorner.py` | this README + [`ENGINEERING.md`](ENGINEERING.md) |
+| **★** | **Complete pipeline on one real frame** | `scripts/complete_demo.py` | [`ENGINEERING.md`](ENGINEERING.md) |
+
+### Running the complete demo (real data)
+
+The complete demo runs every stage on a single **real** match frame and writes
+one figure per stage to `figures/complete/`:
+
+```bash
+# one-time: get the SkillCorner open data (needs git-lfs)
+git clone https://github.com/SkillCorner/opendata.git data/skillcorner
+
+uv run python scripts/complete_demo.py          # default frame 5000
+uv run python scripts/complete_demo.py 12000    # any other frame index
+```
+
+Toggle individual stages (and the slow animated GIF) via the `STAGES` dict at
+the top of `scripts/complete_demo.py` — no code edits needed. Set
+`"reactive_gif": True` to also render `figures/complete/07_reactive.gif`.
 
 ## Repository layout
 
@@ -76,12 +97,13 @@ src/footlab/
   geometry.py          # Phase 1: Voronoi + dominant regions, time_to_arrive
   pitch_control.py     # Phase 2: Spearman potential pitch control field (PPCF)
   value_surface.py     # Phase 2b: xT-style value + defender penalty + cost_map
+  skillcorner.py       # Real data: SkillCorner broadcast tracking -> FrozenFrame
   planners/
     grid_search.py     # Phase 3: Dijkstra, A*, shortcut smoothing
     potential_fields.py# Phase 4: attractor/repulsor field + gradient descent
     pso_path.py        # Phase 5: PSO over cubic-Bezier control points
     reactive.py        # Phase 6: reacting-defender rollout + replanning
-scripts/               # one runnable demo per phase (numbered)
+scripts/               # one runnable demo per phase (numbered) + complete_demo
 tests/                 # pytest, mirrors src modules; fast, seeded, deterministic
 notes/                 # plain-language write-up per phase (intuition + equations)
 figures/               # generated demo images (gitignored)
@@ -120,8 +142,20 @@ reference. Everything is seeded and fast (~2 s total).
 
 ## Data
 
-The repo uses **simulated** frames (`simulate.py`) throughout. The conventions
-above mean real data drops in later without changes:
+The repo runs on **two** kinds of frames:
+
+- **Simulated** (`simulate.py`) — used by demos 00–06; deterministic and fast.
+- **Real** (`skillcorner.py`) — professional broadcast tracking from the
+  [SkillCorner/PySport open data](https://github.com/SkillCorner/opendata)
+  (10 matches of the 2024/25 Australian A-League, 10 fps). The bridge parses
+  their per-frame player/ball coordinates into `FrozenFrame`, derives
+  velocities by finite difference, assigns teams **by possession** (the
+  carrier's team is always the attacking team), and normalises orientation so
+  the attack always runs toward +x. Used by `07_demo_skillcorner.py` and
+  `complete_demo.py`. Download (needs git-lfs):
+  `git clone https://github.com/SkillCorner/opendata.git data/skillcorner`
+
+Other open data worth knowing (not yet wired in):
 
 - [`metrica-sports/sample-data`](https://github.com/metrica-sports/sample-data) — open tracking data.
 - [`SkillCorner/opendata`](https://github.com/SkillCorner/opendata) — broadcast-derived tracking (matches a detection+homography pipeline's noise profile).
@@ -133,12 +167,20 @@ own minimal pitch renderer to avoid the dependency).
 
 ## Scope
 
-**In scope (built):** the full static + reactive planning stack on simulated data.
+**In scope (built):** the full static + reactive planning stack, on both
+simulated frames and real SkillCorner tracking data.
 
 **Out of scope for this repo:** the upstream computer-vision pipeline (drone
 footage → pitch/player/ball detection → homography → `FrozenFrame`), learned
 models (GNNs / TacticAI-style, MARL), and real-time performance. These live
-elsewhere; `footlab` is the tactics/planning brain they feed into.
+elsewhere; `footlab` is the tactics/planning brain they feed into. The
+`skillcorner.py` bridge is the template: any pipeline that can emit player/ball
+coordinates per frame can be adapted to produce a `FrozenFrame`.
+
+## License
+
+[MIT](LICENSE) — every module here is a reimplementation of published, openly
+cited algorithms, so it's permissively licensed. Use it freely.
 
 ## References
 
