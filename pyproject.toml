@@ -3,6 +3,9 @@ name = "footlab"
 version = "0.1.0"
 description = "Research lab for multi-agent spatial optimization (path planning) on a 2D football pitch."
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Jaime Tellie", email = "jaime.tellie@gmail.com" }]
 requires-python = ">=3.11"
 dependencies = [
     "numpy>=1.26",
