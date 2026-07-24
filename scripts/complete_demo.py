@@ -64,7 +64,7 @@ STAGES = {
     "potential_fields": True,
     "pso": True,
     "reactive": True,
-    "reactive_gif": False,   # slow (~tens of seconds); enable when wanted
+    "reactive_gif": True,   # slow (~tens of seconds); enable when wanted
 }
 
 
@@ -81,6 +81,10 @@ class Ctx:
         print(f"Loading real frame {frame_index} ...")
         self.frame = skillcorner.frames_to_frozen(DATA_DIR, frame_index)
         self.frame_index = frame_index
+        # A loose ball (ball_carrier == -1) means there is no carrier to plan a
+        # path FOR. Carrier-dependent stages (APF, PSO, reactive) are skipped in
+        # that case; A* still runs from the ball position (see main()).
+        self.has_carrier = self.frame.ball_carrier >= 0
         self.start = (self.frame.carrier_position
                       if self.frame.carrier_position is not None
                       else self.frame.ball_pos)
@@ -93,7 +97,8 @@ class Ctx:
               f"({self.frame.attack_mask.sum()} att / "
               f"{self.frame.defend_mask.sum()} def) | "
               f"start {np.round(self.start, 1)} | "
-              f"ball {np.round(self.frame.ball_pos, 1)}")
+              f"ball {np.round(self.frame.ball_pos, 1)}"
+              + ("" if self.has_carrier else " | LOOSE BALL (no carrier)"))
 
     def save(self, fig, name: str) -> None:
         OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -299,12 +304,20 @@ def main() -> None:
         stage_cost_map(ctx)
     if STAGES["astar"]:
         stage_astar(ctx)
-    if STAGES["potential_fields"]:
-        stage_potential_fields(ctx)
-    if STAGES["pso"]:
-        stage_pso(ctx)
-    if STAGES["reactive"]:
-        stage_reactive(ctx, make_gif=STAGES["reactive_gif"])
+
+    # Carrier-dependent stages: planning a path for the ball CARRIER only makes
+    # sense when there IS a carrier. On a loose ball (ball_carrier == -1) skip
+    # APF / PSO / reactive and say why. A* above still runs from the ball
+    # position — a useful "where should we move to win the loose ball" read.
+    if not ctx.has_carrier:
+        print("[5-7/7] skipped — loose ball (no carrier to plan a path for)")
+    else:
+        if STAGES["potential_fields"]:
+            stage_potential_fields(ctx)
+        if STAGES["pso"]:
+            stage_pso(ctx)
+        if STAGES["reactive"]:
+            stage_reactive(ctx, make_gif=STAGES["reactive_gif"])
 
     plt.close("all")
     print(f"\nDone in {time.time() - t0:.1f}s. Figures in {OUT_DIR}")
