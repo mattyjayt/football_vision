@@ -17,6 +17,8 @@
 4. [The pipeline, stage by stage](#4-the-pipeline-stage-by-stage)
 5. [The planners compared — A* vs PSO vs potential fields](#5-the-planners-compared--a-vs-pso-vs-potential-fields)
 6. [Real data: the SkillCorner bridge](#6-real-data-the-skillcorner-bridge)
+   - [6.1 SkillCorner data dictionary](#61-skillcorner-data-dictionary-the-four-files-per-match)
+   - [6.2 How SkillCorner produces this data](#62-how-skillcorner-produces-this-whats-public-what-isnt)
 7. [How to run everything](#7-how-to-run-everything)
 8. [Expected results & how to read the figures](#8-expected-results--how-to-read-the-figures)
 9. [Testing philosophy](#9-testing-philosophy)
@@ -258,6 +260,93 @@ training the homography/detection side.
 This bridge is also the **template** for the real goal: your own footage. Any
 pipeline that emits per-frame player/ball coordinates can be adapted the same
 way — write a `your_source_to_frozen()` and the whole engine works unchanged.
+
+### 6.1 SkillCorner data dictionary (the four files per match)
+
+Each match lives in `data/skillcorner/data/matches/{id}/` as four files. Two
+are **raw perception output** (the tracking), two are **derived analytics**
+(computed *from* the tracking). Understanding the split matters: the JSONL is
+what a vision pipeline produces; the CSVs are what an analytics layer adds.
+
+| File | Tier | Contents |
+|---|---|---|
+| `{id}_match.json` | metadata | lineups, teams, referees, pitch size, `home_team_side` |
+| `{id}_tracking_extrapolated.jsonl` | **raw perception** | per-frame player + ball coordinates at 10 fps |
+| `{id}_dynamic_events.csv` | **derived** | on-ball events (possessions, passes, carries) + context |
+| `{id}_phases_of_play.csv` | **derived** | attacking/defending team phases with start/end frames |
+
+**`{id}_match.json`** — the registry. Key fields:
+- `home_team` / `away_team` → `{id, short_name}` (used to map team ids).
+- `home_team_side` → per-period attack direction, e.g. `["right_to_left",
+  "left_to_right"]` (this is what `skillcorner.py` uses to normalise to +x).
+- `players` → list mapping each player's `id` → `team_id`, jersey `number`,
+  `player_role` (position group), `trackable_object`. **This is how you attach
+  identity/team to a raw `player_id` in the tracking.**
+
+**`{id}_tracking_extrapolated.jsonl`** — one JSON object per line, one line per
+frame (10 fps). Each frame object:
+- `frame` (int), `timestamp`, `period` (1 or 2)
+- `ball_data` → `{x, y, z, is_detected}` (meters, center-origin)
+- `possession` → `{player_id, group}` — **inferred** possession; `null` on
+  loose balls / passes in flight (this is why `ball_carrier` can be `-1`)
+- `image_corners_projection` → polygon of the detected on-screen area
+- `player_data` → list of `{x, y, player_id, is_detected}`; `is_detected=False`
+  marks **extrapolated** (off-camera) players
+
+Coordinates are **meters, origin at pitch center, x along the long side** — the
+same convention as `footlab.pitch` (and Metrica/FoT), so no rescaling needed.
+
+**`{id}_dynamic_events.csv`** — one row per on-ball event. ~250 columns;
+highlights:
+- identity: `event_id`, `frame_start/end`, `time_start/end`, `period`
+- actor: `player_id/name/position`, `team_id/shortname`
+- type: `event_type` (e.g. `player_possession`) + `event_subtype`
+- space: `x_start/y_start → x_end/y_end`, `channel_*`, `third_*`,
+  `penalty_area_*` (note: **x/y here are normalised, not meters** — they need
+  scaling to the pitch before use)
+- outcome/context: `pass_outcome`, `lead_to_shot`, `lead_to_goal`, `xthreat`,
+  line-break and defensive-shape metrics, `speed_avg`, and many more
+
+**`{id}_phases_of_play.csv`** — one row per phase (only while the ball is in
+play). Columns include `frame_start/end`, `team_in_possession_id`,
+`team_in_possession_phase_type` (e.g. `build_up`, `create`, `direct`) and the
+simultaneous `team_out_of_possession_phase_type` (e.g. `high_block`,
+`medium_block`), plus team width/length at phase start/end. Each in-possession
+phase maps to an out-of-possession phase.
+
+> Full official specs: SkillCorner's data glossary and the Dynamic Events /
+> Phases of Play CSV specification PDFs linked from the repo README. Known
+> limitations (their words): ~97% of player identities are accurate; some
+> smoothing/control should be applied to raw speed/acceleration.
+
+### 6.2 How SkillCorner produces this (what's public, what isn't)
+
+Their **code is closed-source** — the tracking pipeline is the commercial
+product. What is open is the *output* (this data) plus tutorial notebooks and a
+small `src/` of loader helpers. But the *architecture* is standard and maps
+directly onto the pipeline football_vision is building:
+
+```
+Broadcast video (single panning/zooming camera)
+  → 1. camera calibration / pitch registration (lines/keypoints → homography)
+  → 2. player & ball detection per frame (object detection)
+  → 3. multi-object tracking (persistent IDs) + re-identification / team & jersey
+  → 4. image coords → pitch coords via homography (meters, center-origin)
+  → 5. extrapolation for off-camera players (is_detected=False)
+  → 6. smoothing + possession inference
+  → RAW tier: tracking.jsonl
+  → DERIVED tier: dynamic_events.csv, phases_of_play.csv (computed from the raw)
+```
+
+**The lesson for our own ingestion design:** there are two tiers. The
+**perception tier** (steps 1–5) turns video into coordinates — that is exactly
+what Path B (keypoint detection + homography) builds. The **analytics tier**
+(step 6 onward) consumes coordinates — that is footlab, already built. Keep
+them separate, just as SkillCorner does, and mirror their data shapes where
+sensible (per-frame dicts of `{x, y, id, is_detected}`) so our future pipeline
+drops into `FrozenFrame` the same way. Possession being an *inference* (and
+sometimes `null`) is a tier-6 behaviour — so downstream code must always
+tolerate a missing/loose carrier rather than assuming one exists.
 
 ---
 
