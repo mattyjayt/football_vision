@@ -59,8 +59,18 @@ def process_single_frame(
 
     # --- Load models ---
     det_cfg = config["detector"]
-    player_model = load_player_model(det_cfg["player_model_id"])
-    keypoint_model = load_keypoint_model(det_cfg["keypoint_model_id"])
+    model_type = det_cfg.get("type", "roboflow")
+
+    if model_type == "local":
+        player_model = load_player_model(det_cfg["player_model_path"], model_type="local")
+    else:
+        player_model = load_player_model(det_cfg["player_model_id"], model_type="roboflow")
+
+    kp_type = det_cfg.get("keypoint_model_type", "roboflow")
+    if kp_type == "local":
+        keypoint_model = load_keypoint_model(det_cfg["keypoint_model_path"], model_type="local")
+    else:
+        keypoint_model = load_keypoint_model(det_cfg["keypoint_model_id"])
 
     # --- Read frame ---
     cap = cv2.VideoCapture(source)
@@ -89,7 +99,9 @@ def process_single_frame(
     # --- Homography ---
     hom_cfg = config["homography"]
     H, rms_error = compute_homography(
-        keypoints, min_keypoints=hom_cfg["min_keypoints"]
+        keypoints,
+        min_keypoints=hom_cfg["min_keypoints"],
+        min_confidence=hom_cfg.get("min_keypoint_conf", 0.0),
     )
 
     if H is None:

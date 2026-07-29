@@ -10,7 +10,9 @@ wheels/
 # Virtual environments
 .venv
 .claude
+.DS_Store
 
 # Generated demo figures and downloaded datasets (Phase 0+)
 figures/
 data/
+models/

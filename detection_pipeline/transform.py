@@ -25,25 +25,31 @@ from .infer import KeypointSet
 def compute_homography(
     keypoints: KeypointSet,
     min_keypoints: int = 4,
+    min_confidence: float = 0.0,
 ) -> tuple[np.ndarray | None, float]:
     """Compute the 3×3 homography H mapping pixel coords → pitch meters.
 
     Args:
         keypoints: detected keypoints in pixel space.
         min_keypoints: minimum number of corresponding points required.
+        min_confidence: minimum confidence threshold for keypoints (0.0 = use all).
 
     Returns:
         H: 3×3 homography matrix, or None if insufficient keypoints.
         rms_error: root-mean-square reprojection error in meters (0 if H is None).
     """
-    # Filter to keypoints we have pitch coordinates for
+    # Filter to keypoints we have pitch coordinates for AND meet confidence threshold
     src_points = []  # pixel space
     dst_points = []  # pitch meters
-
+    # Roboflow approach: ignore confidence, mask only undetected points at (0,0) —
+    # a low-conf point that is roughly right still constrains least-squares more
+    # than an absent point. min_confidence kept as an escape hatch (default 0.0).
     for kp_id, pix_xy in keypoints.points.items():
         if kp_id in KEYPOINT_VERTICES_M:
-            src_points.append(pix_xy)
-            dst_points.append(np.array(KEYPOINT_VERTICES_M[kp_id]))
+            conf = keypoints.confidences.get(kp_id, 0.0)
+            if conf >= min_confidence and pix_xy[0] > 1 and pix_xy[1] > 1:
+                src_points.append(pix_xy)
+                dst_points.append(np.array(KEYPOINT_VERTICES_M[kp_id]))
 
     if len(src_points) < min_keypoints:
         return None, 0.0
@@ -51,15 +57,24 @@ def compute_homography(
     src = np.array(src_points, dtype=np.float64).reshape(-1, 1, 2)
     dst = np.array(dst_points, dtype=np.float64).reshape(-1, 1, 2)
 
-    H, mask = cv2.findHomography(src, dst, cv2.RANSAC, 5.0)
+    # Use all keypoints (no RANSAC) — we have high-confidence detections from
+    # a good model, so outliers are rare. RANSAC can fit collinear subsets.
+    H, _ = cv2.findHomography(src, dst, 0)  # 0 = use all points
 
     if H is None:
         return None, 0.0
 
-    # Compute RMS reprojection error (in pitch meters)
+    # Compute RMS reprojection error on all points
     projected = cv2.perspectiveTransform(src, H)
     errors = np.linalg.norm(dst - projected, axis=2).flatten()
     rms = float(np.sqrt(np.mean(errors ** 2)))
+
+    # Consistency check: if RMS error is very high (>5m), the keypoints are
+    # likely misidentified by the model (e.g., left/right confusion)
+    if rms > 5.0:
+        print(f"  WARNING: homography RMS error {rms:.1f}m is very high — "
+              f"keypoints may be misidentified")
+        return None, rms
 
     return H, rms
 

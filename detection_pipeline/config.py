@@ -52,34 +52,67 @@ class PitchSpec:
 
 # ---------------------------------------------------------------------------
 # Keypoint → pitch-coordinate mapping
-# ---------------------------------------------------------------------------
+# Keypoint → pitch-coordinate mapping
+#
+# The Roboflow model uses 0-indexed keypoints (0–31) corresponding to the
+# SoccerPitchConfiguration vertices. We map ALL 32 keypoints and let the
+# RANSAC homography solver handle outliers.
+#
+# Their coordinate system (from sports/configs/soccer.py):
+#   - x: 0 (left goal line) → 12000 (right goal line) [cm]
+#   - y: 0 (top touchline) → 7000 (bottom touchline) [cm]
+#
+# Our coordinate system:
+#   - x: -52.5 (defending goal) → +52.5 (attacking goal) [m]
+#   - y: -34.0 (bottom touchline) → +34.0 (top touchline) [m]
+#
+# Translation: x_ours = (x_theirs_cm / 100) - 52.5
+#              y_ours = (y_theirs_cm / 100) - 34.0
 
-# Keypoint IDs used by the Roboflow football-field-detection model.
-# These are the most stable points: the four corners of the pitch, the
-# penalty-area corners, and the center circle's top/bottom. In practice the
-# model detects most of these in typical broadcast framing.
 KEYPOINT_VERTICES_M: dict[int, tuple[float, float]] = {
-    # Pitch corners
-    0: (-52.5, -34.0),   # bottom-left corner (from attacker's view)
-    1: (+52.5, -34.0),   # bottom-right corner
-    2: (+52.5, +34.0),   # top-right corner
-    3: (-52.5, +34.0),   # top-left corner
-    # Penalty area corners (left / defending side)
-    4: (-52.5 + 16.5, -20.16),   # left penalty box bottom-right
-    5: (-52.5 + 16.5, +20.16),   # left penalty box top-right
-    6: (-52.5, -20.16),          # left penalty box bottom-left (on goal line)
-    7: (-52.5, +20.16),          # left penalty box top-left (on goal line)
-    # Penalty area corners (right / attacking side)
-    8: (+52.5 - 16.5, -20.16),   # right penalty box bottom-left
-    9: (+52.5 - 16.5, +20.16),   # right penalty box top-left
-    10: (+52.5, -20.16),         # right penalty box bottom-right (on goal line)
-    11: (+52.5, +20.16),         # right penalty box top-right (on goal line)
-    # Center circle top and bottom
-    12: (0.0, -9.15),   # center circle bottom
-    13: (0.0, +9.15),   # center circle top
-    # Penalty spots
-    14: (-52.5 + 11.0, 0.0),   # left penalty spot
-    15: (+52.5 - 11.0, 0.0),   # right penalty spot
+    # Left goal line (defending side) — vertices 0–5
+    0: (-52.5, -34.0),      # bottom-left corner
+    1: (-52.5, -20.16),     # penalty box bottom-left
+    2: (-52.5, -9.16),      # goal box bottom-left
+    3: (-52.5, +9.16),      # goal box top-left
+    4: (-52.5, +20.16),     # penalty box top-left
+    5: (-52.5, +34.0),      # top-left corner
+
+    # Left penalty box — vertices 6–12
+    6: (-46.95, -9.16),     # goal box bottom-right
+    7: (-46.95, +9.16),     # goal box top-right
+    8: (-41.5, 0.0),        # penalty spot
+    9: (-36.0, -20.16),     # penalty box bottom-right
+    10: (-36.0, -9.16),     # penalty box bottom-left (inner)
+    11: (-36.0, +9.16),     # penalty box top-left (inner)
+    12: (-36.0, +20.16),    # penalty box top-right
+
+    # Halfway line — vertices 13–16
+    13: (0.0, -34.0),       # halfway line bottom
+    14: (0.0, -9.15),       # center circle bottom
+    15: (0.0, +9.15),       # center circle top
+    16: (0.0, +34.0),       # halfway line top
+
+    # Right penalty box (attacking side) — vertices 17–23
+    17: (+36.0, -20.16),    # penalty box bottom-left
+    18: (+36.0, -9.16),     # goal box bottom-left (inner)
+    19: (+36.0, +9.16),     # goal box top-left (inner)
+    20: (+36.0, +20.16),    # penalty box top-left
+    21: (+41.5, 0.0),       # penalty spot
+    22: (+46.95, -9.16),    # goal box bottom-right
+    23: (+46.95, +9.16),    # goal box top-right
+
+    # Right goal line — vertices 24–29
+    24: (+52.5, -34.0),     # bottom-right corner
+    25: (+52.5, -20.16),    # penalty box bottom-right
+    26: (+52.5, -9.16),     # goal box bottom-right
+    27: (+52.5, +9.16),     # goal box top-right
+    28: (+52.5, +20.16),    # penalty box top-right
+    29: (+52.5, +34.0),     # top-right corner
+
+    # Center circle (left and right edges) — vertices 30–31
+    30: (-9.15, 0.0),       # center circle left
+    31: (+9.15, 0.0),       # center circle right
 }
 
 
@@ -88,16 +121,21 @@ KEYPOINT_VERTICES_M: dict[int, tuple[float, float]] = {
 # ---------------------------------------------------------------------------
 
 PIPELINE: dict[str, Any] = {
-    # --- Models (Roboflow Inference API, pretrained) ---
+    # --- Models ---
     "detector": {
-        "type": "roboflow",
-        # Player + ball detection (one model, multi-class)
+        "type": "local",  # "roboflow" or "local"
+        # Local model paths (used when type="local")
+        "player_model_path": "models/player_detector.pt",
+        # Roboflow model IDs (used when type="roboflow")
         "player_model_id": "football-players-detection-3zvbc/9",
         "player_conf": 0.35,
         "ball_conf": 0.25,
-        # Pitch keypoint detection
-        "keypoint_model_id": "football-field-detection-f07vi/14",
-        "keypoint_conf": 0.30,
+        # Pitch keypoint detection (RF-DETR X-Large, 100% mAP@50)
+        # Local Roboflow-exported weights (32 keypoints, matches KEYPOINT_VERTICES_M)
+        "keypoint_model_type": "local",
+        "keypoint_model_path": "models/football-pitch-detection.pt",
+        "keypoint_model_id": "football-field-detection-f07vi/17",
+        "keypoint_conf": 0.0,
         # Which Roboflow class IDs correspond to what (model-specific)
         "class_map": {
             "player": 2,
@@ -116,8 +154,9 @@ PIPELINE: dict[str, Any] = {
     },
     # --- Homography ---
     "homography": {
-        "min_keypoints": 4,          # minimum to compute a valid homography
-        "rms_reproj_threshold": 1.5, # meters; if RMS reproj error > this, reject
+        "min_keypoints": 6,          # minimum to compute a valid homography
+        "rms_reproj_threshold": 2.0, # meters; if RMS reproj error > this, reject
+        "min_keypoint_conf": 0.3,    # balance: drop garbage low-conf points, keep coverage
     },
     # --- Carrier assignment ---
     "carrier": {

@@ -78,16 +78,30 @@ def _check_inference_available() -> None:
         )
 
 
-def load_player_model(model_id: str) -> object:
-    """Load the player+ball detection model (cached by roboflow inference)."""
+def load_player_model(model_id_or_path: str, model_type: str = "roboflow") -> object:
+    """Load the player+ball detection model.
+
+    model_type "local" loads an ultralytics checkpoint (.pt);
+    "roboflow" loads via the hosted inference API.
+    """
+    if model_type == "local":
+        from ultralytics import YOLO
+        return YOLO(model_id_or_path)
     _check_inference_available()
-    return get_model(model_id=model_id)
+    return get_model(model_id=model_id_or_path)
 
 
-def load_keypoint_model(model_id: str) -> object:
-    """Load the pitch keypoint detection model."""
+def load_keypoint_model(model_id_or_path: str, model_type: str = "roboflow") -> object:
+    """Load the pitch keypoint detection model.
+
+    model_type "local" loads an ultralytics pose checkpoint (.pt);
+    "roboflow" loads via the hosted inference API.
+    """
+    if model_type == "local":
+        from ultralytics import YOLO
+        return YOLO(model_id_or_path)
     _check_inference_available()
-    return get_model(model_id=model_id)
+    return get_model(model_id=model_id_or_path)
 
 
 def detect_players_and_ball(
@@ -103,13 +117,33 @@ def detect_players_and_ball(
         players: list of Detection objects for players, goalkeepers, referees.
         ball:    single Detection for the ball, or None if not found.
     """
-    results = model.infer(frame)[0]  # type: ignore[attr-defined]
+    is_ultralytics = hasattr(model, 'predict') and not hasattr(model, 'infer')
 
     players: list[Detection] = []
     ball: Detection | None = None
 
     player_classes = {class_map["player"], class_map["goalkeeper"], class_map["referee"]}
     ball_class = class_map["ball"]
+
+    if is_ultralytics:
+        results = model.predict(frame, verbose=False)[0]
+        for box in results.boxes:
+            cls_id = int(box.cls[0])
+            conf = float(box.conf[0])
+            xyxy = box.xyxy[0].cpu().numpy()
+
+            if cls_id in player_classes and conf >= player_conf:
+                cls_name = {v: k for k, v in class_map.items()}.get(cls_id, "unknown")
+                players.append(Detection(xyxy=xyxy, confidence=conf,
+                                         class_id=cls_id, class_name=cls_name))
+            elif cls_id == ball_class and conf >= ball_conf:
+                det = Detection(xyxy=xyxy, confidence=conf,
+                                class_id=cls_id, class_name="ball")
+                if ball is None or det.confidence > ball.confidence:
+                    ball = det
+        return players, ball
+
+    results = model.infer(frame)[0]  # type: ignore[attr-defined]
 
     for pred in results.predictions:  # type: ignore[attr-defined]
         cls_id = int(pred.class_id)  # type: ignore[attr-defined]
@@ -142,10 +176,29 @@ def detect_keypoints(
     Returns:
         KeypointSet with pixel-space keypoint positions and confidences.
     """
-    results = model.infer(frame)[0]  # type: ignore[attr-defined]
+    is_ultralytics = hasattr(model, 'predict') and not hasattr(model, 'infer')
 
     points: dict[int, np.ndarray] = {}
     confidences: dict[int, float] = {}
+
+    if is_ultralytics:
+        # Ultralytics pose model: results[0].keypoints.xy / .conf
+        results = model.predict(frame, verbose=False)[0]
+        if results.keypoints is not None:
+            xy = results.keypoints.xy.cpu().numpy()        # (n_det, n_kpt, 2)
+            conf = results.keypoints.conf
+            conf = conf.cpu().numpy() if conf is not None else None  # (n_det, n_kpt)
+            if len(xy) > 0:
+                kxy = xy[0]                                 # single pitch instance
+                kconf = conf[0] if conf is not None else np.ones(len(kxy))
+                for kp_idx in range(len(kxy)):
+                    c = float(kconf[kp_idx])
+                    if c >= min_conf:
+                        points[kp_idx] = kxy[kp_idx]
+                        confidences[kp_idx] = c
+        return KeypointSet(points=points, confidences=confidences)
+
+    results = model.infer(frame)[0]  # type: ignore[attr-defined]
 
     for pred in results.predictions:  # type: ignore[attr-defined]
         # Roboflow keypoint models return keypoints in pred.keypoints
