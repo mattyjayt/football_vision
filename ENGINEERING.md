@@ -338,6 +338,14 @@ Broadcast video (single panning/zooming camera)
   → DERIVED tier: dynamic_events.csv, phases_of_play.csv (computed from the raw)
 ```
 
+**Path B status (as of 2026-07):** steps 1, 2 (players), and 4 are working
+single-frame via `detection_pipeline/` — local 32-keypoint pitch model
+(`models/football-pitch-detection.pt`) + fine-tuned player detector
+(`models/player_detector.pt`), homography RMS ~0.8 m on test frames, output
+JSONL loads into `FrozenFrame` via `io_radar.py`. Remaining: step 2-ball
+(dedicated ball model + slicer), step 3 (ByteTrack + TeamClassifier), step 6
+(temporal smoothing of H). See `detection_pipeline/` package docs.
+
 **The lesson for our own ingestion design:** there are two tiers. The
 **perception tier** (steps 1–5) turns video into coordinates — that is exactly
 what Path B (keypoint detection + homography) builds. The **analytics tier**

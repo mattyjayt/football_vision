@@ -18,9 +18,12 @@ fast, deterministic tests. Components are combined only at the top of the stack.
 **Status: complete.** All phases (0–6) are implemented, tested (97 passing
 tests), and documented. The stack runs on **both** simulated frames and **real
 professional tracking data** (SkillCorner open data) via the `skillcorner.py`
-bridge. See [`applications.md`](applications.md) for where this delivers value,
-[`ENGINEERING.md`](ENGINEERING.md) for a full technical walkthrough, and
-[`notes/`](notes/) for a plain-language write-up of each phase.
+bridge — and, since the `detection_pipeline` merge, on **our own broadcast
+video** via `io_radar.py` (video → player detection + pitch keypoints →
+homography → radar JSONL → FrozenFrame). See [`applications.md`](applications.md)
+for where this delivers value, [`ENGINEERING.md`](ENGINEERING.md) for a full
+technical walkthrough, and [`notes/`](notes/) for a plain-language write-up of
+each phase.
 
 ---
 
@@ -44,11 +47,14 @@ and real drone/tracking-derived frames later are interchangeable**.
 
 ```bash
 uv sync                                    # install deps into .venv
-uv run pytest                              # 91 tests, ~2 s
+uv run pytest                              # 97 tests, ~2 s
 
 uv run python scripts/00_demo_scenarios.py # every demo writes to figures/ (gitignored)
 uv run python scripts/03_demo_grid_search.py
 uv run python scripts/06_demo_reactive.py  # the capstone: static plan fails vs. replanning (GIF)
+
+# Path B — own video → FrozenFrame (single frame):
+uv run python scripts/10_demo_radar_single.py --source data/08fd33_0.mp4 --frame 80
 ```
 
 Each `scripts/NN_demo_*.py` is self-contained: it builds simulated data, runs one
