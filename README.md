@@ -185,14 +185,45 @@ own minimal pitch renderer to avoid the dependency).
 ## Scope
 
 **In scope (built):** the full static + reactive planning stack, on both
-simulated frames and real SkillCorner tracking data.
+simulated frames and real SkillCorner tracking data — **and the vision
+module** (`detection_pipeline/`): own video → player/pitch-keypoint detection
+→ homography → team classification → JSONL → `FrozenFrame` (see `ENGINEERING.md`
+§6b). Plus the `exploration/` workbench: embedder comparisons and temporal
+observability.
 
-**Out of scope for this repo:** the upstream computer-vision pipeline (drone
-footage → pitch/player/ball detection → homography → `FrozenFrame`), learned
-models (GNNs / TacticAI-style, MARL), and real-time performance. These live
-elsewhere; `footlab` is the tactics/planning brain they feed into. The
-`skillcorner.py` bridge is the template: any pipeline that can emit player/ball
-coordinates per frame can be adapted to produce a `FrozenFrame`.
+**Out of scope for this repo:** learned tactical models (GNNs / TacticAI-style,
+MARL) and real-time performance.
+
+## Project milestones & current work
+
+A living log — where we are, what's next. Updated as work lands.
+
+**Done:**
+- Phases 0–6 (planning stack) — complete, 97 tests, on simulation + SkillCorner
+- **Vision step 1–2 (players):** local 32-kpt pitch model + fine-tuned player
+  detector → homography (RMS ~0.8 m) → JSONL → FrozenFrame (`10_demo_radar_single`)
+- **Vision step 3 (teams):** TeamClassifier (SigLIP → UMAP → KMeans) fitted
+  across video; attack side via GK heuristic; **`11_demo_e2e.py`: video →
+  FrozenFrame → pitch control on a real frame**
+- **Exploration workbench:** embedder bake-off (DINOv2-small beat SigLIP v1
+  on our data at 10× smaller), cluster metrics, 2D/3D plots
+- **Temporal analytics Phase 1 (observability core):** per-frame detection
+  counts/confidence/keypoints/H-RMS/box-areas over a whole video → CSV,
+  5-panel dashboard, interactive HTML timeline, per-video report table
+  (`exploration/run_temporal.py`)
+
+**In progress / next:**
+- Temporal Phase 2: multi-frame UMAP/t-SNE (shared projection), silhouette
+  over time, centroid drift
+- Temporal Phase 3: spatial heatmaps, keypoint coverage map, H-jitter trace
+- **Vision step 3b (tracking):** ByteTrack (swappable OC-SORT/DeepSORT) →
+  persistent IDs + finite-diff velocities; then Phase 4 metrics (track
+  lifetimes, ID switches, velocity sanity)
+- **Vision step 2b (ball):** dedicated ball model + InferenceSlicer
+- **Vision step 4:** homography temporal smoothing
+
+**Branching:** `master` = fully working only. Active work on
+`feature/path-b-video-pipeline`, merged when Path B completes.
 
 ## License
 
