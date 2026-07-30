@@ -211,19 +211,27 @@ A living log — where we are, what's next. Updated as work lands.
   counts/confidence/keypoints/H-RMS/box-areas over a whole video → CSV,
   5-panel dashboard, interactive HTML timeline, per-video report table
   (`exploration/run_temporal.py`)
+- **Temporal Phase 2+3:** shared-projection embedding maps over time,
+  silhouette/centroid-drift traces, position heatmaps, keypoint coverage,
+  homography jitter trace
+- **Vision step 3b (tracking):** ByteTrack + RADAR_VIDEO mode — 375 frames,
+  0 H-gaps, median track lifetime 162, velocity sanity 1.75% impossible;
+  Phase 4 tracking-health metrics + dashboard
+- **Annotated side-by-side video** (`12_annotated_video.py`): broadcast with
+  team-colored ellipses+IDs next to the live radar with trails — the
+  evidence artifact that detection + homography + tracking work together
 
-**In progress / next:**
-- Temporal Phase 2: multi-frame UMAP/t-SNE (shared projection), silhouette
-  over time, centroid drift
-- Temporal Phase 3: spatial heatmaps, keypoint coverage map, H-jitter trace
-- **Vision step 3b (tracking):** ByteTrack (swappable OC-SORT/DeepSORT) →
-  persistent IDs + finite-diff velocities; then Phase 4 metrics (track
-  lifetimes, ID switches, velocity sanity)
-- **Vision step 2b (ball):** dedicated ball model + InferenceSlicer
+**In progress / next (branch `feature/path-b-ball-and-smoothing`):**
+- **Vision step 2b (ball):** dedicated ball model + InferenceSlicer +
+  BallTracker interpolation (roboflow approach)
 - **Vision step 4:** homography temporal smoothing
+- Tracker bake-off in exploration: ByteTrack vs OC-SORT vs DeepSORT
+- Next frontier: "what should have happened" — footlab-simulated alternative
+  paths rendered onto the annotated video
 
-**Branching:** `master` = fully working only. Active work on
-`feature/path-b-video-pipeline`, merged when Path B completes.
+**Branching:** `master` = fully working only. Path B through tracking is
+MERGED (commit cd0af66, 2026-07-30). Remaining work on
+`feature/path-b-ball-and-smoothing`.
 
 ## License
 
