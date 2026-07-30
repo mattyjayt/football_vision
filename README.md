@@ -29,6 +29,15 @@ each phase.
 
 ## The pipeline
 
+Two modules, one contract:
+
+```
+ VISION (detection_pipeline/)                    BRAIN (src/footlab/)
+ video ─► detect ─► keypoints ─► homography      FrozenFrame ─► space geometry ─► pitch control
+              ─► teams ─► JSONL ══════════════►        (foundations)   (Voronoi)      (PPCF)
+                              per-frame contract        ─► value + cost ─► PLANNER ─► rollout
+```
+
 A frozen frame flows up a stack of independently-built layers into a planner, and
 finally into a reacting-defender rollout:
 
@@ -38,8 +47,10 @@ FrozenFrame ─► space geometry ─► pitch control ─► value + cost map �
                   dominant regions) PPCF surface)    defender cost)      PSO)          as defenders move)
 ```
 
-Everything consumes a `FrozenFrame` and nothing else, so **simulated frames now
-and real drone/tracking-derived frames later are interchangeable**.
+Everything consumes a `FrozenFrame` and nothing else, so **simulated frames,
+professional tracking data, and our own video-derived frames are
+interchangeable**. The JSONL line is the only contract between the eyes and
+the brain — see `ENGINEERING.md` §6b for the full vision-module design.
 
 ## Quick start
 

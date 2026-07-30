@@ -45,12 +45,19 @@ def process_single_frame(
     source: str,
     frame_id: int,
     config: dict,
+    team_classifier: object | None = None,
 ) -> RadarFrame:
     """Run the full pipeline on ONE frame of a video.
 
     This is the ground-truth stitch test: prove that video → inference →
     homography → radar-view JSONL works end-to-end for a single frame
     before scaling to full video.
+
+    Args:
+        team_classifier: optional fitted TeamClassifier. When provided,
+            players are cropped and assigned team labels (and the frame's
+            attacking_team is resolved); when None, team stays None and
+            io_radar falls back to its honest all-ATTACK default.
     """
     pitch_spec = PitchSpec(
         length_m=config["output"]["pitch_length_m"],
@@ -123,16 +130,36 @@ def process_single_frame(
     # --- Project to pitch coordinates ---
     tracked_players: list[RadarPlayer] = []
     ball_pitch = None
+    attacking_team = None
 
     if H is not None:
         tracker = create_tracker("single_frame")
         tracked = tracker.update(players, H)
 
-        for tp in tracked:
+        # --- Team assignment (optional) ---
+        team_labels: list[str | None] = [None] * len(tracked)
+        if team_classifier is not None and tracked:
+            from .teams_pipeline import assign_teams, crop_detections
+
+            # assign_teams works in DETECTION order; tracked preserves it.
+            det_pitch = np.array([tp.pitch_xy for tp in tracked])
+            crops = crop_detections(frame, players)
+            assignment = assign_teams(crops, players, det_pitch, team_classifier)
+            team_labels = [
+                None if lab == -1 else str(lab) for lab in assignment.labels
+            ]
+            # Referees keep a human-readable marker.
+            team_labels = [
+                "referee" if tp.class_name == "referee" else tl
+                for tp, tl in zip(tracked, team_labels)
+            ]
+            attacking_team = assignment.attacking_team
+
+        for tp, tl in zip(tracked, team_labels):
             tracked_players.append(RadarPlayer(
                 track_id=tp.track_id,
                 class_name=tp.class_name,
-                team=None,  # team classification deferred
+                team=tl,
                 pitch_xy_m=[float(tp.pitch_xy[0]), float(tp.pitch_xy[1])],
                 pitch_vxy_ms=[0.0, 0.0],  # single frame = zero velocity
             ))
@@ -169,6 +196,7 @@ def process_single_frame(
         players=tracked_players,
         ball=ball_pitch,
         carrier_track_id=carrier_id,
+        attacking_team=attacking_team,
     )
 
 

@@ -63,10 +63,20 @@ def load_radar_jsonl(
     positions = np.array([p["pitch_xy_m"] for p in players], dtype=float)
     velocities = np.array([p["pitch_vxy_ms"] for p in players], dtype=float)
 
-    # Team assignment: deferred. For now, put all players on TEAM_ATTACK
-    # (the planner will see them all as attackers). This is honest — we
-    # don't know teams yet. Team classification via SigLIP comes later.
-    team_ids = np.full(len(players), TEAM_ATTACK, dtype=int)
+    # Team assignment: players carry their cluster label ("0"/"1",
+    # "referee", or None pre-classification). attacking_team tells us which
+    # label attacks +x; map through it when available, else all ATTACK
+    # (honest default: unknown). Referees (label "referee") get TEAM_DEFEND —
+    # footlab has no referee concept; they sit out of the attack by default.
+    attacking_label = target_line.get("attacking_team")
+    team_ids = []
+    for p in players:
+        t = p.get("team")
+        if t in ("0", "1") and attacking_label is not None:
+            team_ids.append(TEAM_ATTACK if int(t) == attacking_label else TEAM_DEFEND)
+        else:
+            team_ids.append(TEAM_ATTACK if attacking_label is None else TEAM_DEFEND)
+    team_ids = np.array(team_ids, dtype=int)
 
     # Player IDs = track IDs from the pipeline
     player_ids = np.array([p["track_id"] for p in players])

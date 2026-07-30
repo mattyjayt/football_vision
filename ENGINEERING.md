@@ -19,6 +19,7 @@
 6. [Real data: the SkillCorner bridge](#6-real-data-the-skillcorner-bridge)
    - [6.1 SkillCorner data dictionary](#61-skillcorner-data-dictionary-the-four-files-per-match)
    - [6.2 How SkillCorner produces this data](#62-how-skillcorner-produces-this-whats-public-what-isnt)
+   - [6b The vision module — design & internals](#6b-the-vision-module-detection_pipeline--design--internals)
 7. [How to run everything](#7-how-to-run-everything)
 8. [Expected results & how to read the figures](#8-expected-results--how-to-read-the-figures)
 9. [Testing philosophy](#9-testing-philosophy)
@@ -338,13 +339,166 @@ Broadcast video (single panning/zooming camera)
   → DERIVED tier: dynamic_events.csv, phases_of_play.csv (computed from the raw)
 ```
 
-**Path B status (as of 2026-07):** steps 1, 2 (players), and 4 are working
-single-frame via `detection_pipeline/` — local 32-keypoint pitch model
-(`models/football-pitch-detection.pt`) + fine-tuned player detector
-(`models/player_detector.pt`), homography RMS ~0.8 m on test frames, output
-JSONL loads into `FrozenFrame` via `io_radar.py`. Remaining: step 2-ball
-(dedicated ball model + slicer), step 3 (ByteTrack + TeamClassifier), step 6
-(temporal smoothing of H). See `detection_pipeline/` package docs.
+**Path B status (as of 2026-07):** steps 1, 2 (players), 3 (teams), and 4 are
+working via `detection_pipeline/` — local 32-keypoint pitch model
+(`models/football-pitch-detection.pt`), fine-tuned player detector
+(`models/player_detector.pt`), TeamClassifier (SigLIP → UMAP → KMeans) fitted
+across the video, homography RMS ~0.8 m, and `scripts/11_demo_e2e.py` running
+the full chain video → FrozenFrame → pitch control on a real frame. Remaining:
+step 2-ball (dedicated ball model + slicer), step 3-tracking (ByteTrack,
+persistent IDs + velocities), step 6 (temporal smoothing of H). See §6b.
+
+---
+
+## 6b. The vision module (`detection_pipeline/`) — design & internals
+
+The repo has two halves, deliberately decoupled:
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│  VISION MODULE ("the eyes")        BRAIN MODULE ("the brain")        │
+│  detection_pipeline/               src/footlab/                      │
+│                                                                      │
+│  video ─► detection ─► keypoints ─► homography ─► teams ─► JSONL ─► FrozenFrame ─► analytics  │
+│                                                                      │
+│  Perception tier: pixels in,       Analytics tier: coordinates in,   │
+│  coordinates out.                  decisions out.                    │
+└──────────────────────────────────────────────────────────────────────┘
+                    THE JSONL LINE IS THE ONLY CONTRACT
+```
+
+The seam between them is one JSONL line per frame. Neither side imports the
+other's logic; `footlab.io_radar` reads the file, nothing more. That is what
+let us build and test the entire brain on simulation and SkillCorner data
+before a single frame of our own video existed — and it is what will let the
+vision side one day run on a drone or a Colab GPU while the brain runs
+anywhere.
+
+### 6b.1 Module flow, in detail
+
+```
+video.mp4
+   │
+   ▼
+┌─────────────────────┐   models/player_detector.pt (fine-tuned YOLO, local)
+│ detect_players_and  │   ──► players, ball (pixel bboxes + class)
+│ _ball()             │
+└─────────────────────┘
+   │
+   ▼
+┌─────────────────────┐   models/football-pitch-detection.pt (32-kpt pose, local)
+│ detect_keypoints()  │   ──► KeypointSet{kp_id → (px, py), conf}
+└─────────────────────┘
+   │
+   ▼
+┌─────────────────────┐   config.KEYPOINT_VERTICES_M maps kp_id → (x_m, y_m)
+│ compute_homography()│   cv2.findHomography(all points, no RANSAC)
+│  (transform.py)     │   ──► H (3×3), RMS reprojection error (meters)
+└─────────────────────┘   reject if RMS > threshold (garbage in ≠ plan out)
+   │
+   ▼
+┌─────────────────────┐   pixel (bx, by) → pitch (x_m, y_m) via
+│ project_points()    │   cv2.perspectiveTransform; feet anchor = bbox
+│                     │   bottom-center (where the player meets the ground)
+└─────────────────────┘
+   │
+   ▼
+┌─────────────────────┐   fit once per video: sample frames (stride 60),
+│ teams_pipeline.py   │   crop outfield players, SigLIP embed → UMAP(3D)
+│                     │   → KMeans(k=2); per frame: predict label per crop,
+│                     │   GK by nearest team centroid, referees → -1,
+│                     │   attacking side from GK's x (defends −x ⇒ attacks +x)
+└─────────────────────┘
+   │
+   ▼
+RadarFrame ──► write_jsonl() ──► data/radar_frame_N.jsonl
+   │                                   (THE CONTRACT — one line per frame)
+   ▼
+footlab.io_radar.load_radar_jsonl() ──► FrozenFrame ──► every footlab phase
+```
+
+### 6b.2 The homography, honestly
+
+A homography H is the 3×3 projective transform between two planes — here, the
+pitch as the camera sees it and the pitch as it is. Eight degrees of freedom,
+so ≥4 point correspondences; we feed every detected keypoint (≥6 required,
+typically 10–15 on broadcast frames) and solve least-squares with
+`cv2.findHomography(src, dst, 0)` — deliberately **not** RANSAC, because with
+a good keypoint model outliers are rare, and RANSAC can lock onto a collinear
+subset (e.g. only halfway-line points) and produce an H that fits those points
+perfectly while being wrong everywhere else. Instead we validate with the RMS
+reprojection error in **meters**: project the true landmark positions back
+through H and measure the average miss. Under ~1 m is good for broadcast;
+over 5 m means the model misidentified a landmark (left/right confusion), and
+we reject the frame rather than feed the brain a warped world.
+
+Two hard-won lessons now encoded in `config.py` / `transform.py`:
+
+1. **The vertex map is ground truth — guard it.** A single swapped pair of
+   keypoint→pitch coordinates (our 18/19 bug) silently degrades every frame.
+   The demo's projection-check view (true landmarks as circles, projected
+   points as X's) exists so this class of bug is *visible*, not statistical.
+2. **Filter garbage, not confidence.** Undetected keypoints arrive at (0,0)
+   and are masked; low-confidence points at real-but-wrong pixel positions
+   poison least-squares, so a modest confidence floor (0.3) outperforms both
+   "use everything" and "only high confidence" (which starves the solver of
+   coverage — 7 clustered points fit their region beautifully and the rest of
+   the pitch drifts).
+
+### 6b.3 Team classification — why this stack
+
+```
+crop ─► SigLIP (frozen ViT, 768-dim embedding) ─► L2 normalize
+     ─► UMAP (768 → 3, preserves neighbourhoods, supports .transform())
+     ─► KMeans(k=2) fitted on outfield crops pooled across the video
+```
+
+- **SigLIP is never trained** — it is a frozen feature extractor. `.fit()`
+  trains only UMAP's projection and KMeans's 2 centroids (~seconds). Same-
+  jersey crops land near each other in embedding space; that is all we need.
+- **UMAP over t-SNE** in the pipeline because only UMAP can `.transform()` new
+  points at predict time. t-SNE lives in `viz_embeddings.py` as a *second
+  opinion* for data auditing — two different math families agreeing on the
+  cluster structure is how you learn to trust it.
+- **Labels are arbitrary.** KMeans knows "two groups", not "home/away" or
+  "attack/defend". `resolve_attack_side()` grounds the labels in football
+  logic: a goalkeeper defends the goal he stands in front of, so his team's
+  attacking direction is the opposite side. Fallback when no GK is visible:
+  the team's defensive-depth percentile.
+- **Referees are excluded** (`team = -1`) so they never contaminate KMeans or
+  footlab's masks. footlab has no referee concept; keeping them out of the
+  attack is the honest default.
+
+### 6b.4 The JSONL contract (schema)
+
+One line per frame, self-contained:
+
+```json
+{
+  "frame_id": 80, "source": "08fd33_0.mp4",
+  "pitch": {"length_m": 105.0, "width_m": 68.0, "origin": "center", "attack": "+x"},
+  "homography": [[...3×3...] or null],
+  "keypoints_used": [0, 5, 13, ...],
+  "players": [{"track_id": 3, "class_name": "player", "team": "0",
+               "pitch_xy_m": [-12.4, 8.1], "pitch_vxy_ms": [0.0, 0.0]}],
+  "ball": {"pitch_xy_m": [2.1, -3.4]} | null,
+  "carrier_track_id": 7 | null,
+  "attacking_team": 1 | null
+}
+```
+
+`team` ∈ `"0" | "1" | "referee" | null`; `attacking_team` says which label
+attacks +x, and `io_radar` maps through it to `TEAM_ATTACK`/`TEAM_DEFEND`.
+Frames with `homography: null` are skipped by the loader — a rejected frame is
+a frame the brain never has to reason about.
+
+### 6b.5 The exploration workbench (`exploration/`)
+
+Experiments live off the production path: pluggable embedders (SigLIP v1/v2,
+DINOv2), cluster-quality metrics (silhouette, Davies-Bouldin, Calinski-
+Harabasch), 2D comparison grids and interactive 3D plotly plots. First result:
+**DINOv2-small edges SigLIP v1 on jersey clustering at 10× smaller size** —
+candidates for promotion into the pipeline graduate from here.
 
 **The lesson for our own ingestion design:** there are two tiers. The
 **perception tier** (steps 1–5) turns video into coordinates — that is exactly
@@ -364,7 +518,20 @@ tolerate a missing/loose carrier rather than assuming one exists.
 
 ```bash
 uv sync          # install deps into .venv
-uv run pytest    # 97 tests, ~2 s
+uv run pytest    # 133 tests, ~2 s
+```
+
+### Vision-module demos (own video → FrozenFrame)
+
+```bash
+# single frame: detection + homography + keypoint projection check
+uv run python scripts/10_demo_radar_single.py --source data/08fd33_0.mp4 --frame 80
+
+# the E2E milestone: video → teams → FrozenFrame → pitch control (real frame)
+uv run python scripts/11_demo_e2e.py --source data/08fd33_0.mp4 --frame 80
+
+# exploration workbench: embedder comparison (SigLIP v1/v2, DINOv2)
+uv run python exploration/compare_embedders.py --source data/08fd33_0.mp4 --frame 80
 ```
 
 ### Simulated-data demos (phases 0–6)

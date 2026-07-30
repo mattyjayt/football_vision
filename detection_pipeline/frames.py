@@ -40,6 +40,7 @@ class RadarFrame:
     players: list[RadarPlayer]
     ball: dict | None                    # {"pitch_xy_m": [x, y]} or None
     carrier_track_id: int | None         # track_id of ball carrier, or None
+    attacking_team: int | None = None    # cluster label attacking +x (teams resolved)
 
     def to_jsonl_line(self) -> str:
         """Serialize to a single JSON line."""
