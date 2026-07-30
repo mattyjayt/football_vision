@@ -146,8 +146,9 @@ PIPELINE: dict[str, Any] = {
     },
     # --- Tracker ---
     "tracker": {
-        # "sort" or "oc_sort" (via roboflow trackers lib) — swap by string.
-        "type": "sort",
+        # "bytetrack" (default, via supervision), "sort" (roboflow trackers),
+        # or "single_frame". Swap by string.
+        "type": "bytetrack",
         "iou_threshold": 0.30,
         "max_age": 30,       # frames to keep a lost track alive
         "min_hits": 3,       # detections before a track is confirmed
@@ -167,5 +168,11 @@ PIPELINE: dict[str, Any] = {
         "pitch_length_m": 105.0,
         "pitch_width_m": 68.0,
         "attack_direction": "+x",   # single-frame assumption
+        # Radar display orientation: True = radar north shows pitch +y at the
+        # TOP of the canvas (our default convention). If a video's camera sits
+        # on the -y side of the pitch, the far touchline maps to -y and the
+        # radar looks upside-down vs the broadcast; set this False to flip.
+        # Check with the keypoint overlay in scripts/12_annotated_video.py.
+        "radar_y_up_positive": False,  # this camera sits on the +y side (verified: kp13 y=-34 at pixel top)
     },
 }

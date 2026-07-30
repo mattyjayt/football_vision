@@ -213,17 +213,19 @@ def main() -> None:
                         help="Frame index for RADAR_SINGLE mode")
     parser.add_argument("--out", type=str, default="data/radar_output.jsonl",
                         help="Output JSONL path")
+    parser.add_argument("--stride", type=int, default=1,
+                        help="RADAR_VIDEO: process every Nth frame")
+    parser.add_argument("--max-frames", type=int, default=None,
+                        help="RADAR_VIDEO: cap on processed frames")
     args = parser.parse_args()
 
     if args.mode == Mode.RADAR_VIDEO:
-        raise NotImplementedError(
-            "RADAR_VIDEO is stubbed. Design notes:\n"
-            "  - Use SORTTracker (pitch-plane tracking)\n"
-            "  - Finite-difference velocities across frames\n"
-            "  - Temporal smoothing of homography (median over window)\n"
-            "  - Team classification via SigLIP embeddings\n"
-            "  See detection_pipeline/config.py for tracker swap."
-        )
+        from .video import process_video
+        frames = process_video(args.source, PIPELINE, stride=args.stride,
+                               max_frames=args.max_frames)
+        write_jsonl(frames, args.out)
+        print(f"\nWritten: {args.out} ({len(frames)} frames)")
+        return
 
     # RADAR_SINGLE
     radar_frame = process_single_frame(args.source, args.frame, PIPELINE)
